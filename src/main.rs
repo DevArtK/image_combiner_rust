@@ -1,15 +1,19 @@
 mod args;
-use std::{fs::File, io::BufReader};
 
 use args::Args;
-use image::{io::Reader, ImageFormat, DynamicImage, GenericImageView, imageops::FilterType::Triangle};
+use image::{io::Reader, ImageFormat, DynamicImage, GenericImageView, imageops::FilterType::Triangle, ImageError};
 use std::convert::TryInto;
 
 
 #[derive(Debug)]
 enum ImageDataErrors {
     DifferentImageFormats,
-    BufferTooSmall
+    BufferTooSmall,
+    UnableToReadImageFromPath(std::io::Error),
+    UnableToFormatImage(String),
+    UnableToDecodeImage(ImageError),
+    UnableToSaveImage(ImageError)
+
 }
 
 /// Acts as a temporary storage for Image meta data before being saved
@@ -33,7 +37,9 @@ impl FloatingImage {
         }
     }
     // Methods on a struct take in self as first argument
+
     fn set_data(&mut self, data: Vec<u8>) -> Result<(), ImageDataErrors> {
+        // If the data passed in is bigger than the capacity, means buffer is not big enough to hold onto input data
         if data.len() > self.data.capacity() {
             return Err(ImageDataErrors::BufferTooSmall)
         }
@@ -45,8 +51,8 @@ impl FloatingImage {
 
 fn main() -> Result<(), ImageDataErrors> {
     let args = Args::new();
-    let (image_1, image_1_format) = find_image_from_path(args.image_1);
-    let (image_2, image_2_format) = find_image_from_path(args.image_2);
+    let (image_1, image_1_format) = find_image_from_path(args.image_1)?;
+    let (image_2, image_2_format) = find_image_from_path(args.image_2)?;
 
     // if images aren't the same formats
     if image_1_format != image_2_format {
@@ -62,27 +68,39 @@ fn main() -> Result<(), ImageDataErrors> {
     let combined_data = combine_images(image_1, image_2);
     output.set_data(combined_data)?;
 
-    image::save_buffer_with_format(
+    if let Err(e) = image::save_buffer_with_format(
         output.name, &output.data,
         output.width, output.height,
-        image::ColorType::Rgba8, image_1_format)
-        .unwrap();
-    Ok(())
+        image::ColorType::Rgba8, image_1_format) {
+            Err(ImageDataErrors::UnableToSaveImage(e))
+        } else {
+            Ok(())
+        }
 }
 
 /// Takes in path as a string, returns 2 DynamicImages from image crate
-fn find_image_from_path(path: String) -> (DynamicImage, ImageFormat) {
+fn find_image_from_path(path: String) -> Result<(DynamicImage, ImageFormat), ImageDataErrors> {
     // Reader struct implements an open function which takes a path to an image file
     // Returning the Result, unwrap the result (get result)
-    let image_reader: Reader<BufReader<File>> = Reader::open(path).unwrap();
+    // let image_reader: Reader<BufReader<File>> = Reader::open(path).unwrap();
+    match Reader::open(&path) {
+        Ok(image_reader) => {
 
-    // Get's the image format from the unwrapped value (result) of image reader
-    let image_format: ImageFormat = image_reader.format().unwrap();
-    // Get the actual image from the reader
-    let image: DynamicImage = image_reader.decode().unwrap();
+            // Get's the image format from the unwrapped value (result) of image reader
+            // if let Some() : when dealing with Option
+            if let Some(image_format) = image_reader.format() {
 
-    // Return both values in a tuple (image and it's format)
-    (image, image_format)
+                match image_reader.decode() {
+                    // Return both values in a tuple (image and it's format)
+                    Ok(image) => Ok((image, image_format)),
+                    Err(e) => Err(ImageDataErrors::UnableToDecodeImage(e))
+                }
+            } else {
+                    return Err(ImageDataErrors::UnableToFormatImage(path))
+                }
+        },
+            Err(e) => Err(ImageDataErrors::UnableToReadImageFromPath(e))
+    }
 }
 
 /// Get's the smaller of the two images provided, returns height and width of type u32 of it
